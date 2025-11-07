@@ -6,8 +6,8 @@ import subprocess
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
                              QGroupBox, QSpinBox)
-from PyQt6.QtGui import QIcon, QFont
-from PyQt6.QtCore import QSettings, QTime
+from PyQt6.QtGui import QIcon, QFont, QDesktopServices
+from PyQt6.QtCore import QSettings, QTime, QUrl
 
 class CSUWIFILogin(QWidget):
     def __init__(self):
@@ -53,9 +53,12 @@ class CSUWIFILogin(QWidget):
         self.login_btn.clicked.connect(self.login)
         self.logout_btn = QPushButton('注销')
         self.logout_btn.clicked.connect(self.logout)
+        self.about_btn = QPushButton('关于')
+        self.about_btn.clicked.connect(self.open_about_page)
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.login_btn)
         btn_layout.addWidget(self.logout_btn)
+        btn_layout.addWidget(self.about_btn)
         layout.addLayout(btn_layout)
 
         # Options
@@ -213,6 +216,10 @@ class CSUWIFILogin(QWidget):
                  self.status_label.setText('状态: 注销失败')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 注销出错 - {e}')
+
+    def open_about_page(self):
+        url = QUrl("https://github.com/Temparo/CSU-WIFI-AutoLogin/")
+        QDesktopServices.openUrl(url)
 
     def update_schedule_options_ui(self):
         schedule_type = self.schedule_type_combo.currentText()
