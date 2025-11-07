@@ -3,13 +3,15 @@
 可以选择，或者设置定时任务。
 
 根据[CSU-Net-Portal](https://github.com/barkure/CSU-Net-Portal)修改而来。
+
 ## 使用方法
 
 1. 下载Release中的[ win_v0.2.7z ](https://github.com/CSU-Index/CSU-WIFI-AutoLogin/releases/download/v0.2/win_v0.2.7z)
    ，解压到任意目录
-2. 先运行`setup.exe`，根据提示输入用户名和密码
-3. 再运行`install.bat`，安装程序
+2. 运行`install.bat`，程序会自动弹出配置窗口，输入信息后安装
 
 可以使用“Windows 任务计划”（如每周日运行一次）或设置开机自启动
 
-Ps:还没有写卸载代码，卸载的话直接手动删除文件夹就可以
+## 卸载方法
+
+运行`uninstall.bat`卸载程序，或手动删除`%APPDATA%\CSUAutoLogin`文件夹和桌面快捷方式。
