@@ -8,6 +8,8 @@ on:
 jobs:
   build-release:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -26,25 +28,8 @@ jobs:
         run: |
           pyinstaller --noconsole --onefile --icon="assets/wifi_icon_256x256.ico" --name "CSU-WIFI-AutoLogin-${{ github.ref_name }}" CSU_WIFI_Login.py
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Release Asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./dist/CSU-WIFI-AutoLogin-${{ github.ref_name }}.exe
-          asset_name: CSU-WIFI-AutoLogin-${{ github.ref_name }}.exe
-          asset_content_type: application/vnd.microsoft.portable-executable
+          files: ./dist/CSU-WIFI-AutoLogin-${{ github.ref_name }}.exe
 
