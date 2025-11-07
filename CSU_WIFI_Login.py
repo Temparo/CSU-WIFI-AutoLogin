@@ -5,7 +5,7 @@ import requests
 import subprocess
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
-                             QGroupBox, QSpinBox)
+                             QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl
 
@@ -53,11 +53,14 @@ class CSUWIFILogin(QWidget):
         self.login_btn.clicked.connect(self.login)
         self.logout_btn = QPushButton('注销')
         self.logout_btn.clicked.connect(self.logout)
+        self.refresh_devices_btn = QPushButton('刷新设备')
+        self.refresh_devices_btn.clicked.connect(self.refresh_online_devices)
         self.about_btn = QPushButton('关于')
         self.about_btn.clicked.connect(self.open_about_page)
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.login_btn)
         btn_layout.addWidget(self.logout_btn)
+        btn_layout.addWidget(self.refresh_devices_btn)
         btn_layout.addWidget(self.about_btn)
         layout.addLayout(btn_layout)
 
@@ -127,6 +130,14 @@ class CSUWIFILogin(QWidget):
         layout.addWidget(schedule_group)
         self.schedule_group = schedule_group
 
+        # Online Devices Table
+        self.online_devices_table = QTableWidget()
+        self.online_devices_table.setColumnCount(4)
+        self.online_devices_table.setHorizontalHeaderLabels(['IP地址', 'MAC地址', '登录时间', '设备类型'])
+        self.online_devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.online_devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.online_devices_table)
+
         # Status
         self.status_label = QLabel('状态: 未登录')
         layout.addWidget(self.status_label)
@@ -156,6 +167,8 @@ class CSUWIFILogin(QWidget):
 
                 if self.auto_login_check.isChecked():
                     self.login()
+                else:
+                    self.get_online_devices()
 
     def save_config(self):
         selected_weekdays = [day_code for day_code, cb in self.weekday_checkboxes.items() if cb.isChecked()]
@@ -199,6 +212,7 @@ class CSUWIFILogin(QWidget):
             response = requests.get(url, timeout=5)
             if '{"result":1,"msg":"Portal协议认证成功！"}' in response.text:
                 self.status_label.setText('状态: 登录成功！')
+                self.get_online_devices()
             else:
                 self.status_label.setText(f'状态: 登录失败 - {response.text}')
         except requests.RequestException as e:
@@ -212,6 +226,7 @@ class CSUWIFILogin(QWidget):
             response = requests.get(url, timeout=5)
             if 'success' in response.text:
                  self.status_label.setText('状态: 注销成功')
+                 self.online_devices_table.setRowCount(0) # Clear table on logout
             else:
                  self.status_label.setText('状态: 注销失败')
         except requests.RequestException as e:
@@ -220,6 +235,50 @@ class CSUWIFILogin(QWidget):
     def open_about_page(self):
         url = QUrl("https://github.com/Temparo/CSU-WIFI-AutoLogin/")
         QDesktopServices.openUrl(url)
+
+    def refresh_online_devices(self):
+        self.status_label.setText("状态:正在刷新设备列表...")
+        QApplication.processEvents()
+        self.get_online_devices()
+
+    def get_online_devices(self):
+        username = self.user_input.text()
+        password = self.pass_input.text()
+        if not username or not password:
+            self.status_label.setText('状态: 请填写学号和密码以查询设备')
+            return
+
+        try:
+            # Note: This endpoint requires 'username', not the full 'user_account' with suffix.
+            url = f'https://portal.csu.edu.cn:802/eportal/portal/Custom/online_data?username={username}&password={password}'
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+
+            # Process JSONP response
+            jsonp_text = response.text
+            if jsonp_text.startswith('jsonpReturn(') and jsonp_text.endswith(');'):
+                json_str = jsonp_text[len('jsonpReturn('):-2]
+                data = json.loads(json_str)
+
+                if data.get("result") == 1:
+                    devices = data.get("data", [])
+                    self.online_devices_table.setRowCount(len(devices))
+                    for i, device in enumerate(devices):
+                        device_type = "PC" if device.get("phone_flag") == "0" else "手机"
+                        self.online_devices_table.setItem(i, 0, QTableWidgetItem(device.get('online_ip', '')))
+                        self.online_devices_table.setItem(i, 1, QTableWidgetItem(device.get('online_mac', '')))
+                        self.online_devices_table.setItem(i, 2, QTableWidgetItem(device.get('online_time', '')))
+                        self.online_devices_table.setItem(i, 3, QTableWidgetItem(device_type))
+                    self.status_label.setText(f'状态: 已获取在线设备列表，共 {len(devices)} 台设备。')
+                else:
+                    self.status_label.setText(f'状态: 获取设备列表失败 - {data.get("msg")}')
+            else:
+                self.status_label.setText('状态: 获取设备列表失败 - 响应格式不正确')
+
+        except requests.RequestException as e:
+            self.status_label.setText(f'状态: 获取设备列表出错 - {e}')
+        except json.JSONDecodeError:
+            self.status_label.setText('状态: 获取设备列表失败 - 解析响应失败')
 
     def update_schedule_options_ui(self):
         schedule_type = self.schedule_type_combo.currentText()
