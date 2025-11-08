@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import time
 import requests
 import subprocess
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -172,10 +173,18 @@ class CSUWIFILogin(QWidget):
 
                 # Check current online status first
                 online = self.check_status()
-                # If auto login is enabled and not already online, perform login; else just get devices
-                if self.auto_login_check.isChecked() and not online:
-                    self.login()
-                else:
+                # If auto login is enabled and already online, unbind, logout, then login again
+                if self.auto_login_check.isChecked():
+                    if online:
+                        self.unbind()
+                        time.sleep(2)
+                        self.logout()
+                        time.sleep(2)
+                        self.login()
+                    else:
+                        self.login()
+                # If not auto-login, just get devices if online
+                elif online:
                     self.get_online_devices()
         else:
             # Config does not exist; still check current status
@@ -242,6 +251,27 @@ class CSUWIFILogin(QWidget):
                  self.status_label.setText('状态: 注销失败')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 注销出错 - {e}')
+
+    def unbind(self):
+        username = self.user_input.text()
+        if not username:
+            self.status_label.setText('状态: 请填写学号以解绑')
+            return
+
+        self.status_label.setText('状态: 正在解绑设备...')
+        QApplication.processEvents()
+        try:
+            url = f'https://portal.csu.edu.cn:802/eportal/portal/mac/unbind?user_account={username}'
+            response = requests.get(url, timeout=5)
+            # Assuming the response text gives a clear indication.
+            # You might need to adjust the check based on actual server response.
+            if 'success' in response.text or '成功' in response.text:
+                self.status_label.setText('状态: 解绑成功')
+            else:
+                self.status_label.setText(f'状态: 解绑失败 - {response.text}')
+        except requests.RequestException as e:
+            self.status_label.setText(f'状态: 解绑出错 - {e}')
+
 
     def open_about_page(self):
         url = QUrl("https://github.com/Temparo/CSU-WIFI-AutoLogin/")
