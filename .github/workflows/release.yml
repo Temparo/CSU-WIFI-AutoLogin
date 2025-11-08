@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PyQt6 requests pyinstaller==6.16.0
+          pip install PyQt6 requests keyring pyinstaller==6.16.0
 
       - name: Build with PyInstaller
         run: |
@@ -32,4 +32,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./dist/CSU-WIFI-AutoLogin-${{ github.ref_name }}.exe
-

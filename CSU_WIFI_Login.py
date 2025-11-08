@@ -11,10 +11,21 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl
 
+# --- Secure storage for password ---
+try:
+    import secure_storage
+except Exception:
+    secure_storage = None  # keyring may be unavailable; handle gracefully
+
+# QSettings organization/application identifiers
+ORG_NAME = "CSU"
+APP_NAME = "WifiAutoLogin"
+
 class CSUWIFILogin(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.config_path = 'config.json'
+        # Removed config_path: we now rely solely on QSettings
+        self.settings = QSettings(ORG_NAME, APP_NAME)
         self.current_device_ip = None
         self.current_device_mac = None
         self.init_ui()
@@ -179,65 +190,81 @@ class CSUWIFILogin(QMainWindow):
         layout.setSpacing(10)
 
     def load_config(self):
-        if os.path.exists(self.config_path):
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-                self.user_input.setText(config.get('username', ''))
-                self.pass_input.setText(config.get('password', ''))
-                self.net_combo.setCurrentText(config.get('net_type', '校园网'))
-                self.auto_login_check.setChecked(config.get('auto_login', False))
+        """Load UI state from QSettings (no file-based config).
+        Password is fetched from keyring (if available) based on username.
+        """
+        username = self.settings.value('login/username', '', str)
+        net_type = self.settings.value('login/net_type', '校园网', str)
+        auto_login = self.settings.value('login/auto_login', False, bool)
+        schedule_enabled = self.settings.value('schedule/enabled', False, bool)
+        schedule_time = self.settings.value('schedule/time', '08:00', str)
+        schedule_type = self.settings.value('schedule/type', '每天', str)
+        schedule_days_interval = int(self.settings.value('schedule/days_interval', 2))
+        schedule_weekdays_raw = self.settings.value('schedule/weekdays', '', str)
+        selected_weekdays = [d for d in schedule_weekdays_raw.split(',') if d] if schedule_weekdays_raw else []
 
-                # Load schedule config
-                self.schedule_group.setChecked(config.get('schedule_enabled', False))
-                schedule_time_str = config.get('schedule_time', '08:00')
-                self.schedule_time_edit.setTime(QTime.fromString(schedule_time_str, "HH:mm"))
-                self.schedule_type_combo.setCurrentText(config.get('schedule_type', '每天'))
-                self.schedule_days_spinbox.setValue(config.get('schedule_days_interval', 2))
-                selected_weekdays = config.get('schedule_weekdays', [])
-                for day_code, checkbox in self.weekday_checkboxes.items():
-                    checkbox.setChecked(day_code in selected_weekdays)
-
-                self.update_schedule_options_ui()  # Ensure correct UI state on load
-
-                # Check current online status first
-                online = self.check_status()
-                # If auto login is enabled and already online, unbind, logout, then login again
-                if self.auto_login_check.isChecked():
-                    if online:
-                        self.unbind()
-                        time.sleep(2)
-                        self.logout()
-                        time.sleep(2)
-                        self.login()
-                    else:
-                        self.login()
-                # If not auto-login, just get devices if online
-                elif online:
-                    self.get_online_devices()
+        # Populate UI
+        self.user_input.setText(username)
+        if secure_storage and username:
+            self.pass_input.setText(secure_storage.get_password(username) or '')
         else:
-            # Config does not exist; still check current status
-            self.check_status()
+            self.pass_input.setText('')
+        self.net_combo.setCurrentText(net_type)
+        self.auto_login_check.setChecked(auto_login)
+
+        self.schedule_group.setChecked(schedule_enabled)
+        self.schedule_time_edit.setTime(QTime.fromString(schedule_time, "HH:mm"))
+        self.schedule_type_combo.setCurrentText(schedule_type)
+        self.schedule_days_spinbox.setValue(schedule_days_interval)
+        for day_code, checkbox in self.weekday_checkboxes.items():
+            checkbox.setChecked(day_code in selected_weekdays)
+        self.update_schedule_options_ui()
+
+        # Online status & optional auto-login
+        online = self.check_status()
+        if self.auto_login_check.isChecked():
+            if online:
+                self.unbind()
+                time.sleep(2)
+                self.logout()
+                time.sleep(2)
+                self.login()
+            else:
+                self.login()
+        elif online:
+            self.get_online_devices()
 
     def save_config(self):
+        """Persist current UI state to QSettings (except password)."""
         selected_weekdays = [day_code for day_code, cb in self.weekday_checkboxes.items() if cb.isChecked()]
-        config = {
-            'username': self.user_input.text(),
-            'password': self.pass_input.text(),
-            'net_type': self.net_combo.currentText(),
-            'auto_login': self.auto_login_check.isChecked(),
-            'schedule_enabled': self.schedule_group.isChecked(),
-            'schedule_time': self.schedule_time_edit.time().toString("HH:mm"),
-            'schedule_type': self.schedule_type_combo.currentText(),
-            'schedule_days_interval': self.schedule_days_spinbox.value(),
-            'schedule_weekdays': selected_weekdays
-        }
-        with open(self.config_path, 'w') as f:
-            json.dump(config, f, indent=4)
+        self.settings.setValue('login/username', self.user_input.text().strip())
+        self.settings.setValue('login/net_type', self.net_combo.currentText())
+        self.settings.setValue('login/auto_login', self.auto_login_check.isChecked())
+        self.settings.setValue('schedule/enabled', self.schedule_group.isChecked())
+        self.settings.setValue('schedule/time', self.schedule_time_edit.time().toString("HH:mm"))
+        self.settings.setValue('schedule/type', self.schedule_type_combo.currentText())
+        self.settings.setValue('schedule/days_interval', self.schedule_days_spinbox.value())
+        self.settings.setValue('schedule/weekdays', ','.join(selected_weekdays))
+
+        # Store or clear password in keyring
+        if secure_storage:
+            username = self.user_input.text().strip()
+            pwd = self.pass_input.text()
+            if username and pwd:
+                secure_storage.set_password(username, pwd)
+            elif username and not pwd:
+                secure_storage.delete_password(username)
         QMessageBox.information(self, '成功', '配置已保存！')
 
     def login(self):
         username = self.user_input.text()
         password = self.pass_input.text()
+        # If password empty, try to fetch from keyring lazily
+        if not password and secure_storage and username:
+            kp = secure_storage.get_password(username)
+            if kp:
+                password = kp
+                self.pass_input.setText(kp)
         net_type = self.net_combo.currentText()
 
         if not username or not password:
@@ -319,6 +346,12 @@ class CSUWIFILogin(QMainWindow):
     def get_online_devices(self):
         username = self.user_input.text()
         password = self.pass_input.text()
+        # If password empty, try to fetch from keyring lazily
+        if not password and secure_storage and username:
+            kp = secure_storage.get_password(username)
+            if kp:
+                password = kp
+                self.pass_input.setText(kp)
         if not username or not password:
             self.status_label.setText('状态: 请填写学号和密码以查询设备')
             return
