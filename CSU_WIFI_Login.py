@@ -6,7 +6,8 @@ import requests
 import subprocess
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
-                             QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QStatusBar)
+                             QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QStatusBar,
+                             QGridLayout)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl
 
@@ -29,27 +30,33 @@ class CSUWIFILogin(QMainWindow):
 
         # --- Login Settings Group ---
         login_settings_group = QGroupBox('登录设置')
-        login_settings_layout = QVBoxLayout()
+        login_settings_layout = QGridLayout() # Use QGridLayout for better alignment
 
-        form_layout = QFormLayout()
+        # Form fields
         self.user_input = QLineEdit()
+        self.user_input.setToolTip('请输入您的学号')
         self.pass_input = QLineEdit()
         self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_input.setToolTip('请输入您的密码')
         self.net_combo = QComboBox()
         self.net_combo.addItems(['中国电信', '中国移动', '中国联通', '校园网'])
-        form_layout.addRow('学号:', self.user_input)
-        form_layout.addRow('密码:', self.pass_input)
-        form_layout.addRow('运营商:', self.net_combo)
-        login_settings_layout.addLayout(form_layout)
+        self.net_combo.setToolTip('请选择您使用的运营商')
 
-        options_layout = QHBoxLayout()
+        login_settings_layout.addWidget(QLabel('学号:'), 0, 0)
+        login_settings_layout.addWidget(self.user_input, 0, 1)
+        login_settings_layout.addWidget(QLabel('密码:'), 1, 0)
+        login_settings_layout.addWidget(self.pass_input, 1, 1)
+        login_settings_layout.addWidget(QLabel('运营商:'), 2, 0)
+        login_settings_layout.addWidget(self.net_combo, 2, 1)
+
+        # Checkboxes
         self.auto_login_check = QCheckBox('自动登录')
+        self.auto_login_check.setToolTip('程序启动时自动使用保存的配置进行登录')
         self.startup_check = QCheckBox('开机自启')
+        self.startup_check.setToolTip('设置程序是否在系统启动时自动运行')
         self.startup_check.stateChanged.connect(self.handle_startup)
-        options_layout.addWidget(self.auto_login_check)
-        options_layout.addWidget(self.startup_check)
-        options_layout.addStretch()
-        login_settings_layout.addLayout(options_layout)
+        login_settings_layout.addWidget(self.auto_login_check, 3, 0)
+        login_settings_layout.addWidget(self.startup_check, 3, 1)
 
         login_settings_group.setLayout(login_settings_layout)
         layout.addWidget(login_settings_group)
@@ -68,11 +75,19 @@ class CSUWIFILogin(QMainWindow):
         self.refresh_devices_btn.clicked.connect(self.refresh_online_devices)
         self.about_btn = QPushButton('关于')
         self.about_btn.clicked.connect(self.open_about_page)
-        btn_layout.addWidget(self.save_btn)
+
+        # Core actions
         btn_layout.addWidget(self.login_btn)
         btn_layout.addWidget(self.logout_btn)
+        btn_layout.addStretch()
+
+        # Auxiliary actions
         btn_layout.addWidget(self.status_btn)
         btn_layout.addWidget(self.refresh_devices_btn)
+        btn_layout.addStretch()
+
+        # Secondary actions
+        btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.about_btn)
         layout.addLayout(btn_layout)
 
@@ -83,13 +98,20 @@ class CSUWIFILogin(QMainWindow):
         schedule_group.setChecked(False)
         schedule_group_layout = QVBoxLayout()
 
+        # Help text
+        schedule_help_label = QLabel('启用后，将在指定时间自动执行登录操作。')
+        schedule_help_label.setStyleSheet("color: gray;")
+        schedule_group_layout.addWidget(schedule_help_label)
+
         # Top row: Time edit and apply button
         top_schedule_layout = QHBoxLayout()
         top_schedule_layout.addWidget(QLabel("执行时间:"))
         self.schedule_time_edit = QTimeEdit()
         self.schedule_time_edit.setDisplayFormat("HH:mm")
+        self.schedule_time_edit.setToolTip('设置任务执行的具体时间')
         top_schedule_layout.addWidget(self.schedule_time_edit)
         self.schedule_apply_btn = QPushButton('应用定时任务')
+        self.schedule_apply_btn.setToolTip('创建或更新Windows计划任务')
         self.schedule_apply_btn.clicked.connect(self.handle_scheduled_task)
         top_schedule_layout.addWidget(self.schedule_apply_btn)
         schedule_group_layout.addLayout(top_schedule_layout)
@@ -99,6 +121,7 @@ class CSUWIFILogin(QMainWindow):
         schedule_type_layout.addWidget(QLabel("重复方式:"))
         self.schedule_type_combo = QComboBox()
         self.schedule_type_combo.addItems(["每天", "每隔几天", "每周"])
+        self.schedule_type_combo.setToolTip('选择任务的重复频率')
         self.schedule_type_combo.currentIndexChanged.connect(self.update_schedule_options_ui)
         schedule_type_layout.addWidget(self.schedule_type_combo)
         schedule_group_layout.addLayout(schedule_type_layout)
