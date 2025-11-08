@@ -4,13 +4,13 @@ import os
 import time
 import requests
 import subprocess
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                            QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
-                             QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView)
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
+                             QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QStatusBar)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl
 
-class CSUWIFILogin(QWidget):
+class CSUWIFILogin(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config_path = 'config.json'
@@ -23,30 +23,36 @@ class CSUWIFILogin(QWidget):
         self.setWindowTitle('CSU WIFI AutoLogin')
         self.setWindowIcon(QIcon('assets/wifi_icon_256x256.ico'))
 
-        layout = QVBoxLayout()
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
 
-        # Username
-        user_layout = QHBoxLayout()
-        user_layout.addWidget(QLabel('学号:'))
+        # --- Login Settings Group ---
+        login_settings_group = QGroupBox('登录设置')
+        login_settings_layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
         self.user_input = QLineEdit()
-        user_layout.addWidget(self.user_input)
-        layout.addLayout(user_layout)
-
-        # Password
-        pass_layout = QHBoxLayout()
-        pass_layout.addWidget(QLabel('密码:'))
         self.pass_input = QLineEdit()
         self.pass_input.setEchoMode(QLineEdit.EchoMode.Password)
-        pass_layout.addWidget(self.pass_input)
-        layout.addLayout(pass_layout)
-
-        # Network Type
-        net_layout = QHBoxLayout()
-        net_layout.addWidget(QLabel('运营商:'))
         self.net_combo = QComboBox()
         self.net_combo.addItems(['中国电信', '中国移动', '中国联通', '校园网'])
-        net_layout.addWidget(self.net_combo)
-        layout.addLayout(net_layout)
+        form_layout.addRow('学号:', self.user_input)
+        form_layout.addRow('密码:', self.pass_input)
+        form_layout.addRow('运营商:', self.net_combo)
+        login_settings_layout.addLayout(form_layout)
+
+        options_layout = QHBoxLayout()
+        self.auto_login_check = QCheckBox('自动登录')
+        self.startup_check = QCheckBox('开机自启')
+        self.startup_check.stateChanged.connect(self.handle_startup)
+        options_layout.addWidget(self.auto_login_check)
+        options_layout.addWidget(self.startup_check)
+        options_layout.addStretch()
+        login_settings_layout.addLayout(options_layout)
+
+        login_settings_group.setLayout(login_settings_layout)
+        layout.addWidget(login_settings_group)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -56,7 +62,7 @@ class CSUWIFILogin(QWidget):
         self.login_btn.clicked.connect(self.login)
         self.logout_btn = QPushButton('注销')
         self.logout_btn.clicked.connect(self.logout)
-        self.status_btn = QPushButton('获取状态')
+        self.status_btn = QPushButton('查询状态')
         self.status_btn.clicked.connect(self.check_status)
         self.refresh_devices_btn = QPushButton('刷新设备')
         self.refresh_devices_btn.clicked.connect(self.refresh_online_devices)
@@ -70,12 +76,6 @@ class CSUWIFILogin(QWidget):
         btn_layout.addWidget(self.about_btn)
         layout.addLayout(btn_layout)
 
-        # Options
-        self.auto_login_check = QCheckBox('自动登录')
-        self.startup_check = QCheckBox('开机自启')
-        self.startup_check.stateChanged.connect(self.handle_startup)
-        layout.addWidget(self.auto_login_check)
-        layout.addWidget(self.startup_check)
 
         # Scheduled Login Group
         schedule_group = QGroupBox('定时登录')
@@ -144,11 +144,15 @@ class CSUWIFILogin(QWidget):
         self.online_devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.online_devices_table)
 
-        # Status
+        # Status Bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
         self.status_label = QLabel('状态: 未登录')
-        layout.addWidget(self.status_label)
+        self.status_bar.addWidget(self.status_label)
 
-        self.setLayout(layout)
+        # Set layout margins and spacing
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
     def load_config(self):
         if os.path.exists(self.config_path):
