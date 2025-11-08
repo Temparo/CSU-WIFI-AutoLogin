@@ -2,7 +2,7 @@
 在Windows系统下，自动（一键）登录中南大学校园网，保持校园网登录态。
 可以选择，或者设置定时任务。
 
-根据[CSU-Net-Portal](https://github.com/barkure/CSU-Net-Portal)修改而来。
+根据[CSU-Net-Portal](https://github.com/barkure/CSU-Net-Portal)修改而来，非常感谢原作者。
 
 ## 使用方法
 

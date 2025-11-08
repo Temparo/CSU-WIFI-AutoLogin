@@ -13,6 +13,8 @@ class CSUWIFILogin(QWidget):
     def __init__(self):
         super().__init__()
         self.config_path = 'config.json'
+        self.current_device_ip = None
+        self.current_device_mac = None
         self.init_ui()
         self.load_config()
 
@@ -53,6 +55,8 @@ class CSUWIFILogin(QWidget):
         self.login_btn.clicked.connect(self.login)
         self.logout_btn = QPushButton('注销')
         self.logout_btn.clicked.connect(self.logout)
+        self.status_btn = QPushButton('获取状态')
+        self.status_btn.clicked.connect(self.check_status)
         self.refresh_devices_btn = QPushButton('刷新设备')
         self.refresh_devices_btn.clicked.connect(self.refresh_online_devices)
         self.about_btn = QPushButton('关于')
@@ -60,6 +64,7 @@ class CSUWIFILogin(QWidget):
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.login_btn)
         btn_layout.addWidget(self.logout_btn)
+        btn_layout.addWidget(self.status_btn)
         btn_layout.addWidget(self.refresh_devices_btn)
         btn_layout.addWidget(self.about_btn)
         layout.addLayout(btn_layout)
@@ -163,12 +168,18 @@ class CSUWIFILogin(QWidget):
                 for day_code, checkbox in self.weekday_checkboxes.items():
                     checkbox.setChecked(day_code in selected_weekdays)
 
-                self.update_schedule_options_ui() # Ensure correct UI state on load
+                self.update_schedule_options_ui()  # Ensure correct UI state on load
 
-                if self.auto_login_check.isChecked():
+                # Check current online status first
+                online = self.check_status()
+                # If auto login is enabled and not already online, perform login; else just get devices
+                if self.auto_login_check.isChecked() and not online:
                     self.login()
                 else:
                     self.get_online_devices()
+        else:
+            # Config does not exist; still check current status
+            self.check_status()
 
     def save_config(self):
         selected_weekdays = [day_code for day_code, cb in self.weekday_checkboxes.items() if cb.isChecked()]
@@ -226,7 +237,7 @@ class CSUWIFILogin(QWidget):
             response = requests.get(url, timeout=5)
             if 'success' in response.text:
                  self.status_label.setText('状态: 注销成功')
-                 self.online_devices_table.setRowCount(0) # Clear table on logout
+                 self.online_devices_table.setRowCount(0)  # Clear table on logout
             else:
                  self.status_label.setText('状态: 注销失败')
         except requests.RequestException as e:
@@ -265,8 +276,15 @@ class CSUWIFILogin(QWidget):
                     self.online_devices_table.setRowCount(len(devices))
                     for i, device in enumerate(devices):
                         device_type = "PC" if device.get("phone_flag") == "0" else "手机"
-                        self.online_devices_table.setItem(i, 0, QTableWidgetItem(device.get('online_ip', '')))
-                        self.online_devices_table.setItem(i, 1, QTableWidgetItem(device.get('online_mac', '')))
+                        online_ip = device.get('online_ip', '')
+                        online_mac = device.get('online_mac', '')
+
+                        # 检查是否为本机
+                        if online_ip and online_mac and online_ip == self.current_device_ip and online_mac == self.current_device_mac:
+                            device_type += " (本机)"
+
+                        self.online_devices_table.setItem(i, 0, QTableWidgetItem(online_ip))
+                        self.online_devices_table.setItem(i, 1, QTableWidgetItem(online_mac))
                         self.online_devices_table.setItem(i, 2, QTableWidgetItem(device.get('online_time', '')))
                         self.online_devices_table.setItem(i, 3, QTableWidgetItem(device_type))
                     self.status_label.setText(f'状态: 已获取在线设备列表，共 {len(devices)} 台设备。')
@@ -364,6 +382,53 @@ class CSUWIFILogin(QWidget):
         else:
             settings.remove(app_name)
 
+    def check_status(self) -> bool:
+        """检查当前网络认证状态
+        期望响应格式: ( {"result":1, ...} ) —— 最外层一对括号包裹 JSON 对象。
+        返回: bool 表示是否已经在线。
+        """
+        try:
+            dr = ''  # callback 参数，示例为空字符串
+            url = f'https://portal.csu.edu.cn/drcom/chkstatus?callback={dr}'
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            raw_text = response.text.strip()
+
+            # 按示例格式解析: ( {...} )
+            if not (raw_text.startswith('(') and raw_text.endswith(')')):
+                self.status_label.setText('状态: 状态查询失败 - 响应不符合示例格式 (…JSON…)')
+                self.current_device_ip = None
+                self.current_device_mac = None
+                return False
+
+            json_str = raw_text[1:-1]
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                self.status_label.setText('状态: 状态查询失败 - JSON 解析错误')
+                self.current_device_ip = None
+                self.current_device_mac = None
+                return False
+
+            # 判断 result 字段
+            if data.get('result') == 1:
+                uid = data.get('uid', '')
+                v4ip = data.get('v4ip') or data.get('v46ip') or ''
+                self.current_device_ip = v4ip
+                self.current_device_mac = data.get('olmac')
+                self.status_label.setText(f'状态: 已在线 (账号: {uid} IP: {v4ip})')
+                return True
+            else:
+                self.status_label.setText('状态: 当前未在线')
+                self.current_device_ip = None
+                self.current_device_mac = None
+                return False
+        except requests.RequestException as e:
+            self.status_label.setText(f'状态: 状态查询失败 - {e}')
+            self.current_device_ip = None
+            self.current_device_mac = None
+            return False
+
 
 if __name__ == '__main__':
     # Handle command line arguments for silent auto-login
@@ -375,8 +440,8 @@ if __name__ == '__main__':
         # We need to create a dummy window to access config and login methods
         # but we don't show it.
         login_task = CSUWIFILogin()
-        login_task.load_config() # Load config to get credentials
-        login_task.login() # Perform login
+        login_task.load_config()  # Load config to get credentials
+        login_task.login()  # Perform login
         # No app.exec() is called, so the script will exit after login attempt.
         sys.exit(0)
 
