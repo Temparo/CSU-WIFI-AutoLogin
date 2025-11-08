@@ -235,6 +235,8 @@ class CSUWIFILogin(QWidget):
                 self.get_online_devices()
             else:
                 self.status_label.setText(f'状态: 登录失败 - {response.text}')
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 登录出错 - {e}')
 
@@ -249,6 +251,8 @@ class CSUWIFILogin(QWidget):
                  self.online_devices_table.setRowCount(0)  # Clear table on logout
             else:
                  self.status_label.setText('状态: 注销失败')
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 注销出错 - {e}')
 
@@ -269,6 +273,8 @@ class CSUWIFILogin(QWidget):
                 self.status_label.setText('状态: 解绑成功')
             else:
                 self.status_label.setText(f'状态: 解绑失败 - {response.text}')
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 解绑出错 - {e}')
 
@@ -323,6 +329,8 @@ class CSUWIFILogin(QWidget):
             else:
                 self.status_label.setText('状态: 获取设备列表失败 - 响应格式不正确')
 
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 获取设备列表出错 - {e}')
         except json.JSONDecodeError:
@@ -453,6 +461,11 @@ class CSUWIFILogin(QWidget):
                 self.current_device_ip = None
                 self.current_device_mac = None
                 return False
+        except requests.exceptions.ConnectionError:
+            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
+            self.current_device_ip = None
+            self.current_device_mac = None
+            return False
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 状态查询失败 - {e}')
             self.current_device_ip = None
