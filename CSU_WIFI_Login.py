@@ -142,6 +142,7 @@ class CSUWIFILogin(QMainWindow):
         self.online_devices_table.setHorizontalHeaderLabels(['IP地址', 'MAC地址', '登录时间', '设备类型'])
         self.online_devices_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.online_devices_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.online_devices_table.setFixedHeight(120)  # Set a fixed height for header + 3 rows
         layout.addWidget(self.online_devices_table)
 
         # Status Bar
