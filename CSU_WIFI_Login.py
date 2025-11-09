@@ -1,7 +1,6 @@
 import sys
 import json
 import os
-import time
 import requests
 import subprocess
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -9,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QStatusBar,
                              QGridLayout)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
-from PyQt6.QtCore import QSettings, QTime, QUrl
+from PyQt6.QtCore import QSettings, QTime, QUrl, QTimer
 
 # --- Secure storage for password ---
 try:
@@ -20,6 +19,14 @@ except Exception:
 # QSettings organization/application identifiers
 ORG_NAME = "CSU"
 APP_NAME = "WifiAutoLogin"
+
+# Added: resource_path helper to support PyInstaller one-file (_MEIPASS)
+def resource_path(relative: str) -> str:
+    """Return absolute path to resource, compatible with PyInstaller bundled executable."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(getattr(sys, '_MEIPASS'), relative)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, relative)
 
 class CSUWIFILogin(QMainWindow):
     def __init__(self):
@@ -33,7 +40,8 @@ class CSUWIFILogin(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle('CSU WIFI AutoLogin')
-        self.setWindowIcon(QIcon('assets/wifi_icon_256x256.ico'))
+        # Changed: use resource_path for icon
+        self.setWindowIcon(QIcon(resource_path('assets/wifi_icon_256x256.ico')))
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -223,16 +231,30 @@ class CSUWIFILogin(QMainWindow):
         # Online status & optional auto-login
         online = self.check_status()
         if self.auto_login_check.isChecked():
-            if online:
-                self.unbind()
-                time.sleep(2)
-                self.logout()
-                time.sleep(2)
-                self.login()
-            else:
-                self.login()
+            # Replaced blocking time.sleep chain with QTimer singleShot callbacks
+            self._start_auto_login_sequence(online)
         elif online:
             self.get_online_devices()
+
+    def _start_auto_login_sequence(self, already_online: bool):
+        """Begin non-blocking auto-login sequence using timers instead of sleep."""
+        if already_online:
+            self.unbind()
+            # Use an instance-based single-shot timer to avoid type checker warnings and ensure lifetime
+            self._auto_timer1 = QTimer(self)
+            self._auto_timer1.setSingleShot(True)
+            self._auto_timer1.timeout.connect(self._auto_login_do_logout)
+            self._auto_timer1.start(2000)
+        else:
+            self.login()
+
+    def _auto_login_do_logout(self):
+        self.logout()
+        # Chain next step with another single-shot timer
+        self._auto_timer2 = QTimer(self)
+        self._auto_timer2.setSingleShot(True)
+        self._auto_timer2.timeout.connect(self.login)
+        self._auto_timer2.start(2000)
 
     def save_config(self):
         """Persist current UI state to QSettings (except password)."""
@@ -290,6 +312,8 @@ class CSUWIFILogin(QMainWindow):
                 self.get_online_devices()
             else:
                 self.status_label.setText(f'状态: 登录失败 - {response.text}')
+        except requests.exceptions.Timeout:
+            self.status_label.setText('状态: 请求超时，请稍后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -303,9 +327,11 @@ class CSUWIFILogin(QMainWindow):
             response = requests.get(url, timeout=5)
             if 'success' in response.text:
                  self.status_label.setText('状态: 注销成功')
-                 self.online_devices_table.setRowCount(0)  # Clear table on logout
+                 self.online_devices_table.setRowCount(0)
             else:
                  self.status_label.setText('状态: 注销失败')
+        except requests.exceptions.Timeout:
+            self.status_label.setText('状态: 请求超时，请稍后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -328,11 +354,12 @@ class CSUWIFILogin(QMainWindow):
                 self.status_label.setText('状态: 解绑成功')
             else:
                 self.status_label.setText(f'状态: 解绑失败 - {response.text}')
+        except requests.exceptions.Timeout:
+            self.status_label.setText('状态: 请求超时，请稍后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
             self.status_label.setText(f'状态: 解绑出错 - {e}')
-
 
     def open_about_page(self):
         url = QUrl("https://github.com/Temparo/CSU-WIFI-AutoLogin/")
@@ -390,6 +417,8 @@ class CSUWIFILogin(QMainWindow):
             else:
                 self.status_label.setText('状态: 获取设备列表失败 - 响应格式不正确')
 
+        except requests.exceptions.Timeout:
+            self.status_label.setText('状态: 请求超时，请稍后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -522,6 +551,11 @@ class CSUWIFILogin(QMainWindow):
                 self.current_device_ip = None
                 self.current_device_mac = None
                 return False
+        except requests.exceptions.Timeout:
+            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.current_device_ip = None
+            self.current_device_mac = None
+            return False
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
             self.current_device_ip = None

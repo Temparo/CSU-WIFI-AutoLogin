@@ -26,7 +26,12 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --noconsole --onefile --icon="assets/wifi_icon_256x256.ico" --name "CSU-WIFI-AutoLogin-${{ github.ref_name }}" CSU_WIFI_Login.py
+          pyinstaller --noconsole --onefile --noconfirm ^
+            --icon="assets\wifi_icon_256x256.ico" ^
+            --add-data "assets;assets" ^
+            --hidden-import keyring.backends.Windows ^
+            --name "CSU-WIFI-AutoLogin-${{ github.ref_name }}" ^
+            CSU_WIFI_Login.py
 
       - name: Release
         uses: softprops/action-gh-release@v2
