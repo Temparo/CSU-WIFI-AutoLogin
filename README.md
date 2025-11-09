@@ -2,7 +2,7 @@
 
 在 Windows 上一键登录 CSU-Student，提供自动登录、定时登录、开机自启与设备状态查看。
 
-<div style="text-align: center;"><img src="assets/Screenshot.png" alt="Screenshot" width="50%"></div>
+<img src="assets/Screenshot.png" alt="Screenshot" width="70%"></div>
 
 ---
 
