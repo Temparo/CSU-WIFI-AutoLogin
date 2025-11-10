@@ -3,6 +3,7 @@ import json
 import os
 import requests
 import subprocess
+import time
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QComboBox, QCheckBox, QMessageBox, QTimeEdit,
                              QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QStatusBar,
@@ -29,14 +30,17 @@ def resource_path(relative: str) -> str:
     return os.path.join(base_dir, relative)
 
 class CSUWIFILogin(QMainWindow):
-    def __init__(self):
+    def __init__(self, headless: bool = False):
+        """Create main window.
+        headless=True 用于计划任务或命令行静默执行，不启动自动登录的定时 QTimer 序列。"""
         super().__init__()
-        # Removed config_path: we now rely solely on QSettings
+        self.headless = headless  # 记录是否为无界面/静默模式
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.current_device_ip = None
         self.current_device_mac = None
         self.init_ui()
-        self.load_config()
+        # 在初始化后加载配置；根据 headless 状态决定是否启动自动登录序列
+        self.load_config(suppress_auto_sequence=headless)
 
     def init_ui(self):
         self.setWindowTitle('CSU WIFI AutoLogin')
@@ -197,10 +201,10 @@ class CSUWIFILogin(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-    def load_config(self):
+    def load_config(self, suppress_auto_sequence: bool = False):
         """Load UI state from QSettings (no file-based config).
         Password is fetched from keyring (if available) based on username.
-        """
+        suppress_auto_sequence=True 时不执行自动登录定时逻辑（用于静默任务）。"""
         username = self.settings.value('login/username', '', str)
         net_type = self.settings.value('login/net_type', '校园网', str)
         auto_login = self.settings.value('login/auto_login', False, bool)
@@ -228,12 +232,11 @@ class CSUWIFILogin(QMainWindow):
             checkbox.setChecked(day_code in selected_weekdays)
         self.update_schedule_options_ui()
 
-        # Online status & optional auto-login
+        # Online status & optional auto-login (仅非 headless 并且未被抑制时执行定时序列)
         online = self.check_status()
-        if self.auto_login_check.isChecked():
-            # Replaced blocking time.sleep chain with QTimer singleShot callbacks
+        if (not suppress_auto_sequence) and (not self.headless) and self.auto_login_check.isChecked():
             self._start_auto_login_sequence(online)
-        elif online:
+        elif online and (not self.headless):
             self.get_online_devices()
 
     def _start_auto_login_sequence(self, already_online: bool):
@@ -255,6 +258,19 @@ class CSUWIFILogin(QMainWindow):
         self._auto_timer2.setSingleShot(True)
         self._auto_timer2.timeout.connect(self.login)
         self._auto_timer2.start(2000)
+
+    def run_headless_auto_login_sequence(self, delay_seconds: int = 2) -> None:
+        """在静默模式下以阻塞方式执行 解绑→延时→注销→延时→登录。
+        无需事件循环与 QTimer，适用于 --auto-login 与计划任务。
+
+        delay_seconds: 两步动作之间的等待秒数，默认 2 秒，与 GUI 定时器一致。
+        """
+        # 即使未在线，执行注销也不会造成问题；按指定顺序强制执行可最大化成功率。
+        self.unbind()
+        time.sleep(max(0, delay_seconds))
+        self.logout()
+        time.sleep(max(0, delay_seconds))
+        self.login()
 
     def save_config(self):
         """Persist current UI state to QSettings (except password)."""
@@ -457,16 +473,13 @@ class CSUWIFILogin(QMainWindow):
             return
 
         # --- Create or Update Task ---
-        app_path = os.path.abspath(sys.argv[0])
-        if getattr(sys, 'frozen', False):
-            app_path = sys.executable
-        else:
-            app_path = f'"{sys.executable.replace("python.exe", "pythonw.exe")}" "{os.path.abspath(__file__)}"'
+        # 使用统一构造函数生成静默运行命令
+        invoke_cmd = self._build_headless_invoke_cmd()
 
         schedule_time = self.schedule_time_edit.time().toString("HH:mm")
         schedule_type = self.schedule_type_combo.currentText()
 
-        base_command = f'schtasks /create /tn "{task_name}" /tr "{app_path} --auto-login" /st {schedule_time} /f'
+        base_command = f'schtasks /create /tn "{task_name}" /tr "{invoke_cmd}" /st {schedule_time} /f'
 
         if schedule_type == "每天":
             modifier = "/sc DAILY"
@@ -494,6 +507,19 @@ class CSUWIFILogin(QMainWindow):
 
         self.save_config()
 
+    def _build_headless_invoke_cmd(self) -> str:
+        """构造一次性静默运行命令，返回完整命令字符串，路径已加引号。"""
+        if getattr(sys, 'frozen', False):
+            return f'"{sys.executable}" --auto-login'
+        python_exec = sys.executable
+        py_dir = os.path.dirname(python_exec)
+        pythonw_candidate = os.path.join(py_dir, 'pythonw.exe')
+        if os.path.basename(python_exec).lower() == 'python.exe' and os.path.exists(pythonw_candidate):
+            interpreter = f'"{pythonw_candidate}"'
+        else:
+            interpreter = f'"{python_exec}"'
+        script_path = f'"{os.path.abspath(__file__)}"'
+        return f'{interpreter} {script_path} --auto-login'
 
     def handle_startup(self, state):
         app_name = "CSUWIFILogin"
@@ -513,8 +539,7 @@ class CSUWIFILogin(QMainWindow):
     def check_status(self) -> bool:
         """检查当前网络认证状态
         期望响应格式: ( {"result":1, ...} ) —— 最外层一对括号包裹 JSON 对象。
-        返回: bool 表示是否已经在线。
-        """
+        返回: bool 表示是否已经在线。"""
         try:
             dr = ''  # callback 参数，示例为空字符串
             url = f'https://portal.csu.edu.cn/drcom/chkstatus?callback={dr}'
@@ -575,12 +600,10 @@ if __name__ == '__main__':
         if not app:
             app = QApplication(sys.argv)
 
-        # We need to create a dummy window to access config and login methods
-        # but we don't show it.
-        login_task = CSUWIFILogin()
-        login_task.load_config()  # Load config to get credentials
-        login_task.login()  # Perform login
-        # No app.exec() is called, so the script will exit after login attempt.
+        # headless 模式：以同步方式执行 解绑→延时→注销→延时→登录
+        login_task = CSUWIFILogin(headless=True)
+        login_task.run_headless_auto_login_sequence(delay_seconds=2)
+        # No app.exec() is called, so the script will exit after the attempt.
         sys.exit(0)
 
 
