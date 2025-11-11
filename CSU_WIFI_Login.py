@@ -356,6 +356,8 @@ class CSUWIFILogin(QMainWindow):
             response = requests.get(url, timeout=5)
             if '{"result":1,"msg":"Portal协议认证成功！"}' in response.text:
                 self.status_label.setText('状态: 登录成功！')
+                # 登录成功后自动查询状态和刷新设备
+                self.check_status()
                 self.get_online_devices()
                 # Check if auto-exit is enabled
                 if self.auto_exit_check.isChecked():
