@@ -93,7 +93,7 @@ class CSUWIFILogin(QMainWindow):
         self.save_btn = QPushButton('保存配置')
         self.save_btn.clicked.connect(self.save_config)
         self.login_btn = QPushButton('登录')
-        self.login_btn.clicked.connect(self.login)
+        self.login_btn.clicked.connect(self.gui_login)
         self.logout_btn = QPushButton('注销')
         self.logout_btn.clicked.connect(self.logout)
         self.status_btn = QPushButton('查询状态')
@@ -239,14 +239,17 @@ class CSUWIFILogin(QMainWindow):
         self.update_schedule_options_ui()
 
         # Online status & optional auto-login (仅非 headless 并且未被抑制时执行定时序列)
-        online = self.check_status()
         if (not suppress_auto_sequence) and (not self.headless) and self.auto_login_check.isChecked():
-            self._start_auto_login_sequence(online)
-        elif online and (not self.headless):
-            self.get_online_devices()
+            self._start_auto_login_sequence()
+        else:
+            online = self.check_status()
+            if online and (not self.headless):
+                self.get_online_devices()
 
-    def _start_auto_login_sequence(self, already_online: bool):
-        """Begin non-blocking auto-login sequence using timers instead of sleep."""
+    def _start_auto_login_sequence(self):
+        """Begin non-blocking auto-login sequence using timers instead of sleep.
+        内部自己检查在线状态，避免外层重复判断。"""
+        already_online = self.check_status()
         if already_online:
             self.unbind()
             # Use an instance-based single-shot timer to avoid type checker warnings and ensure lifetime
@@ -299,6 +302,28 @@ class CSUWIFILogin(QMainWindow):
         elif username and not pwd:
             secure_storage.delete_password(username)
         QMessageBox.information(self, '成功', '配置已保存！')
+
+    def gui_login(self):
+        """GUI登录按钮点击处理方法。
+        验证输入后，直接调用自动登录序列。
+        自动登录序列内部会检查在线状态：
+        已在线：解绑→延时→注销→延时→登录
+        未在线：直接登录"""
+        username = self.user_input.text()
+        password = self.pass_input.text()
+        # If password empty, try to fetch from keyring lazily
+        if not password and username:
+            kp = secure_storage.get_password(username)
+            if kp:
+                password = kp
+                self.pass_input.setText(kp)
+
+        if not username or not password:
+            self.status_label.setText('状态: 请填写学号和密码')
+            return
+
+        # 直接调用自动登录序列，内部会判断在线状态
+        self._start_auto_login_sequence()
 
     def login(self):
         username = self.user_input.text()
