@@ -75,9 +75,15 @@ class CSUWIFILogin(QMainWindow):
         self.startup_check.stateChanged.connect(self.handle_startup)
         self.auto_exit_check = QCheckBox('自动退出')
         self.auto_exit_check.setToolTip('登录成功后自动关闭程序')
-        login_settings_layout.addWidget(self.auto_login_check, 3, 0)
-        login_settings_layout.addWidget(self.startup_check, 3, 1)
-        login_settings_layout.addWidget(self.auto_exit_check, 3, 2)
+
+        # Create horizontal layout for checkboxes to keep them left-aligned
+        checkbox_layout = QHBoxLayout()
+        checkbox_layout.addWidget(self.auto_login_check)
+        checkbox_layout.addWidget(self.startup_check)
+        checkbox_layout.addWidget(self.auto_exit_check)
+        checkbox_layout.addStretch()  # Push checkboxes to the left
+
+        login_settings_layout.addLayout(checkbox_layout, 3, 0, 1, 2)  # Span 2 columns
 
         login_settings_group.setLayout(login_settings_layout)
         layout.addWidget(login_settings_group)
