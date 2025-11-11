@@ -37,6 +37,7 @@ class CSUWIFILogin(QMainWindow):
         # 初始化异步网络工作线程
         self.network_worker = NetworkWorker()
         self._connect_network_signals()
+        self._worker_busy = False  # 标记worker是否正在执行任务
 
         self.init_ui()
         # 在初始化后加载配置；根据 headless 状态决定是否启动自动登录序列
@@ -220,6 +221,7 @@ class CSUWIFILogin(QMainWindow):
 
     def _on_login_finished(self, success: bool, message: str):
         """处理登录完成信号。"""
+        self._worker_busy = False
         if success:
             self.status_label.setText(f'状态: {message}')
             # 登录成功后自动查询状态（设备列表由状态查询完成后自动刷新）
@@ -233,16 +235,19 @@ class CSUWIFILogin(QMainWindow):
 
     def _on_logout_finished(self, success: bool, message: str):
         """处理注销完成信号。"""
+        self._worker_busy = False
         self.status_label.setText(f'状态: {message}')
         if success:
             self.online_devices_table.setRowCount(0)
 
     def _on_unbind_finished(self, success: bool, message: str):
         """处理解绑完成信号。"""
+        self._worker_busy = False
         self.status_label.setText(f'状态: {message}')
 
     def _on_status_finished(self, is_online: bool, data: dict):
         """处理状态检查完成信号。"""
+        self._worker_busy = False
         if is_online:
             uid = data.get('uid', '')
             v4ip = data.get('v4ip') or data.get('v46ip') or ''
@@ -260,8 +265,11 @@ class CSUWIFILogin(QMainWindow):
                 self._auto_timer1.timeout.connect(self._auto_login_do_logout)
                 self._auto_timer1.start(2000)
             else:
-                # 普通状态查询完成后，立即查询设备列表（此时current_device_ip已更新）
-                self._async_get_devices()
+                # 普通状态查询完成后，延迟查询设备列表（给线程停止时间）
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._async_get_devices)
+                timer.start(100)
         else:
             error = data.get('error', '当前未在线')
             if error == '当前未在线':
@@ -278,6 +286,7 @@ class CSUWIFILogin(QMainWindow):
 
     def _on_devices_finished(self, success: bool, devices: list, message: str):
         """处理获取设备列表完成信号。"""
+        self._worker_busy = False
         self.status_label.setText(f'状态: {message}')
         if success:
             self.online_devices_table.setRowCount(len(devices))
@@ -336,11 +345,14 @@ class CSUWIFILogin(QMainWindow):
             checkbox.setChecked(day_code in selected_weekdays)
         self.update_schedule_options_ui()
 
-        # Online status & optional auto-login (仅非 headless 并且未被抑制时执行定时序列)
-        if (not suppress_auto_sequence) and (not self.headless) and self.auto_login_check.isChecked():
-            self._start_auto_login_sequence()
-        else:
-            self._async_check_status()
+        # 启动时执行状态查询和设备刷新
+        if not suppress_auto_sequence and not self.headless:
+            if auto_login:
+                # 勾选了自动登录，执行自动登录序列
+                self._start_auto_login_sequence()
+            else:
+                # 未勾选自动登录，只查询状态和刷新设备
+                self._async_check_status()
 
     def _start_auto_login_sequence(self):
         """异步自动登录流程。"""
@@ -358,51 +370,113 @@ class CSUWIFILogin(QMainWindow):
 
     def _async_login(self, user_account: str, password: str) -> None:
         """异步执行登录操作（在后台线程中运行）。"""
+        if self._worker_busy:
+            return
+        self._worker_busy = True
         self.network_worker.set_login_task(user_account, password)
         self.network_worker.start()
 
     def _async_logout(self) -> None:
         """异步执行注销操作（在后台线程中运行）。"""
+        if self._worker_busy:
+            return
+        self._worker_busy = True
         self.network_worker.set_logout_task()
         self.network_worker.start()
 
     def _async_unbind(self, username: str) -> None:
         """异步执行解绑操作（在后台线程中运行）。"""
+        if self._worker_busy:
+            return
+        self._worker_busy = True
         self.network_worker.set_unbind_task(username)
         self.network_worker.start()
 
     def _async_check_status(self) -> None:
         """异步执行状态检查（在后台线程中运行）。"""
+        if self._worker_busy:
+            return
+        self._worker_busy = True
         self.network_worker.set_status_check_task()
         self.network_worker.start()
 
     def _async_get_devices(self) -> None:
         """异步获取在线设备列表（在后台线程中运行）。"""
+        if self._worker_busy:
+            return
         username = self.user_input.text()
         password = self.pass_input.text()
-        # 如果密���为空，尝试从 keyring 获取
+        # 如果密码为空，尝试从 keyring 获取
         if not password and username:
             kp = secure_storage.get_password(username)
             if kp:
                 password = kp
                 self.pass_input.setText(kp)
         if username and password:
+            self._worker_busy = True
             self.network_worker.set_devices_query_task(username, password)
             self.network_worker.start()
 
     def run_headless_auto_login_sequence(self, delay_seconds: int = 2) -> None:
-        """静默模式下执行 解绑→延时→注销→延时→登录。"""
-        self.unbind()
+        """静默模式下执行 解绑→延时→注销→延时→登录（同步方式）。"""
+        username = self.user_input.text()
+        password = self.pass_input.text()
+        net_type = self.net_combo.currentText()
+
+        if not username or not password:
+            print("错误: 请先填写学号和密码")
+            return
+
+        net_types = {
+            '中国电信': 'telecomn',
+            '中国移动': 'cmccn',
+            '中国联通': 'unicomn',
+            '校园网': ''
+        }
+        user_account = f"{username}@{net_types[net_type]}" if net_types[net_type] else username
+
+        # 同步执行：解绑
+        try:
+            url = f'https://portal.csu.edu.cn:802/eportal/portal/mac/unbind?user_account={username}'
+            requests.get(url, timeout=5)
+            print("解绑完成")
+        except Exception as e:
+            print(f"解绑失败: {e}")
+
         time.sleep(max(0, delay_seconds))
-        self.logout()
+
+        # 同步执行：注销
+        try:
+            url = 'https://portal.csu.edu.cn:802/eportal/portal/logout'
+            requests.get(url, timeout=5)
+            print("注销完成")
+        except Exception as e:
+            print(f"注销失败: {e}")
+
         time.sleep(max(0, delay_seconds))
-        self.login()
+
+        # 同步执行：登录
+        try:
+            url = f'https://portal.csu.edu.cn:802/eportal/portal/login?user_account={user_account}&user_password={password}'
+            response = requests.get(url, timeout=5)
+            if '{"result":1,"msg":"Portal协议认证成功！"}' in response.text:
+                print("登录成功")
+            else:
+                print(f"登录失败: {response.text}")
+        except Exception as e:
+            print(f"登录失败: {e}")
 
     def save_config(self):
         """保存配置到QSettings。"""
         selected_weekdays = [day_code for day_code, cb in self.weekday_checkboxes.items() if cb.isChecked()]
-        self.settings.setValue('login/username', self.user_input.text().strip())
-        self.settings.setValue('login/net_type', self.net_combo.currentText())
+
+        # 保存登录信息（即使不勾选自动登录也会保存，因为定时登录需要用到）
+        username = self.user_input.text().strip()
+        pwd = self.pass_input.text()
+        net_type = self.net_combo.currentText()
+
+        self.settings.setValue('login/username', username)
+        self.settings.setValue('login/net_type', net_type)
         self.settings.setValue('login/auto_login', self.auto_login_check.isChecked())
         self.settings.setValue('login/auto_exit', self.auto_exit_check.isChecked())
         self.settings.setValue('schedule/enabled', self.schedule_group.isChecked())
@@ -411,20 +485,26 @@ class CSUWIFILogin(QMainWindow):
         self.settings.setValue('schedule/days_interval', self.schedule_days_spinbox.value())
         self.settings.setValue('schedule/weekdays', ','.join(selected_weekdays))
 
-        # Store or clear password in keyring
-        username = self.user_input.text().strip()
-        pwd = self.pass_input.text()
+        # 保存或清除密码（总是保存，因为定时登录需要用到）
         if username and pwd:
             secure_storage.set_password(username, pwd)
         elif username and not pwd:
             secure_storage.delete_password(username)
+
         QMessageBox.information(self, '成功', '配置已保存！')
 
     def gui_login(self):
         """GUI登录按钮点击处理。"""
         username = self.user_input.text()
         password = self.pass_input.text()
-        # ...existing code...
+
+        # 如果密码为空，尝试从keyring获取
+        if not password and username:
+            kp = secure_storage.get_password(username)
+            if kp:
+                password = kp
+                self.pass_input.setText(kp)
+
         if not username or not password:
             self.status_label.setText('状态: 请填写学号和密码')
             return

@@ -163,7 +163,7 @@ class NetworkWorker(QThread):
             self.status_finished.emit(False, {'error': f'状态查询失败 - {e}'})
 
     def _do_get_devices(self) -> None:
-        """���行获取在线设备列表操作。"""
+        """获取在线设备列表操作。"""
         username = self._params.get('username', '')
         password = self._params.get('password', '')
 
