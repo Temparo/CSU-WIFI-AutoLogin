@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl, QTimer
 import secure_storage
+from network_worker import NetworkWorker
 
 # QSettings organization/application identifiers
 ORG_NAME = "CSU"
@@ -26,13 +27,17 @@ def resource_path(relative: str) -> str:
 
 class CSUWIFILogin(QMainWindow):
     def __init__(self, headless: bool = False):
-        """Create main window.
-        headless=True 用于计划任务或命令行静默执行，不启动自动登录的定时 QTimer 序列。"""
+        """初始化主窗口。"""
         super().__init__()
         self.headless = headless  # 记录是否为无界面/静默模式
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.current_device_ip = None
         self.current_device_mac = None
+
+        # 初始化异步网络工作线程
+        self.network_worker = NetworkWorker()
+        self._connect_network_signals()
+
         self.init_ui()
         # 在初始化后加载配置；根据 headless 状态决定是否启动自动登录序列
         self.load_config(suppress_auto_sequence=headless)
@@ -205,10 +210,91 @@ class CSUWIFILogin(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
+    def _connect_network_signals(self):
+        """连接网络工作线程的所有信号到相应的槽函数。"""
+        self.network_worker.login_finished.connect(self._on_login_finished)
+        self.network_worker.logout_finished.connect(self._on_logout_finished)
+        self.network_worker.unbind_finished.connect(self._on_unbind_finished)
+        self.network_worker.status_finished.connect(self._on_status_finished)
+        self.network_worker.devices_finished.connect(self._on_devices_finished)
+
+    def _on_login_finished(self, success: bool, message: str):
+        """处理登录完成信号。"""
+        if success:
+            self.status_label.setText(f'状态: {message}')
+            # 登录成功后自动查询状态和刷新设备
+            self._async_check_status()
+            self._async_get_devices()
+            # 检查是否启用自动退出
+            if self.auto_exit_check.isChecked():
+                QApplication.processEvents()
+                sys.exit(0)
+        else:
+            self.status_label.setText(f'状态: {message}')
+
+    def _on_logout_finished(self, success: bool, message: str):
+        """处理注销完成信号。"""
+        self.status_label.setText(f'状态: {message}')
+        if success:
+            self.online_devices_table.setRowCount(0)
+
+    def _on_unbind_finished(self, success: bool, message: str):
+        """处理解绑完成信号。"""
+        self.status_label.setText(f'状态: {message}')
+
+    def _on_status_finished(self, is_online: bool, data: dict):
+        """处理状态检查完成信号。"""
+        if is_online:
+            uid = data.get('uid', '')
+            v4ip = data.get('v4ip') or data.get('v46ip') or ''
+            self.current_device_ip = v4ip
+            self.current_device_mac = data.get('olmac')
+            self.status_label.setText(f'状态: 已在线 (账号: {uid} IP: {v4ip})')
+
+            # 如果这是自动登录流程中的状态检查，则执行后续操作
+            if hasattr(self, '_auto_login_check_status_flag') and self._auto_login_check_status_flag:
+                self._auto_login_check_status_flag = False
+                # 已在线：执行 解绑→延时→注销→延时→登录
+                self._async_unbind(self.user_input.text())
+                self._auto_timer1 = QTimer(self)
+                self._auto_timer1.setSingleShot(True)
+                self._auto_timer1.timeout.connect(self._auto_login_do_logout)
+                self._auto_timer1.start(2000)
+        else:
+            error = data.get('error', '当前未在线')
+            if error == '当前未在线':
+                self.status_label.setText('状态: 当前未在线')
+            else:
+                self.status_label.setText(f'状态: {error}')
+            self.current_device_ip = None
+            self.current_device_mac = None
+
+            # 如果这是自动登录流程中的状态检查，则直接登录
+            if hasattr(self, '_auto_login_check_status_flag') and self._auto_login_check_status_flag:
+                self._auto_login_check_status_flag = False
+                self.login()
+
+    def _on_devices_finished(self, success: bool, devices: list, message: str):
+        """处理获取设备列表完成信号。"""
+        self.status_label.setText(f'状态: {message}')
+        if success:
+            self.online_devices_table.setRowCount(len(devices))
+            for i, device in enumerate(devices):
+                device_type = "PC" if device.get("phone_flag") == "0" else "手机"
+                online_ip = device.get('online_ip', '')
+                online_mac = device.get('online_mac', '')
+
+                # 检查是否为本机
+                if online_ip and online_mac and online_ip == self.current_device_ip and online_mac == self.current_device_mac:
+                    device_type += " (本机)"
+
+                self.online_devices_table.setItem(i, 0, QTableWidgetItem(online_ip))
+                self.online_devices_table.setItem(i, 1, QTableWidgetItem(online_mac))
+                self.online_devices_table.setItem(i, 2, QTableWidgetItem(device.get('online_time', '')))
+                self.online_devices_table.setItem(i, 3, QTableWidgetItem(device_type))
+
     def load_config(self, suppress_auto_sequence: bool = False):
-        """Load UI state from QSettings (no file-based config).
-        Password is fetched from keyring (if available) based on username.
-        suppress_auto_sequence=True 时不执行自动登录定时逻辑（用于静默任务）。"""
+        """加载配置从QSettings。"""
         username = self.settings.value('login/username', '', str)
         net_type = self.settings.value('login/net_type', '校园网', str)
         auto_login = self.settings.value('login/auto_login', False, bool)
@@ -242,39 +328,59 @@ class CSUWIFILogin(QMainWindow):
         if (not suppress_auto_sequence) and (not self.headless) and self.auto_login_check.isChecked():
             self._start_auto_login_sequence()
         else:
-            online = self.check_status()
-            if online and (not self.headless):
-                self.get_online_devices()
+            self._async_check_status()
+            self._async_get_devices()
 
     def _start_auto_login_sequence(self):
-        """Begin non-blocking auto-login sequence using timers instead of sleep.
-        内部自己检查在线状态，避免外层重复判断。"""
-        already_online = self.check_status()
-        if already_online:
-            self.unbind()
-            # Use an instance-based single-shot timer to avoid type checker warnings and ensure lifetime
-            self._auto_timer1 = QTimer(self)
-            self._auto_timer1.setSingleShot(True)
-            self._auto_timer1.timeout.connect(self._auto_login_do_logout)
-            self._auto_timer1.start(2000)
-        else:
-            self.login()
+        """异步自动登录流程。"""
+        self._auto_login_check_status_flag = True
+        self._async_check_status()
 
     def _auto_login_do_logout(self):
-        self.logout()
-        # Chain next step with another single-shot timer
+        """自动登录流程中的注销步骤。"""
+        self._async_logout()
+        # 使用单次定时器连接下一步（登录）
         self._auto_timer2 = QTimer(self)
         self._auto_timer2.setSingleShot(True)
         self._auto_timer2.timeout.connect(self.login)
         self._auto_timer2.start(2000)
 
-    def run_headless_auto_login_sequence(self, delay_seconds: int = 2) -> None:
-        """在静默模式下以阻塞方式执行 解绑→延时→注销→延时→登录。
-        无需事件循环与 QTimer，适用于 --auto-login 与计划任务。
+    def _async_login(self, user_account: str, password: str) -> None:
+        """异步执行登录操作（在后台线程中运行）。"""
+        self.network_worker.set_login_task(user_account, password)
+        self.network_worker.start()
 
-        delay_seconds: 两步动作之间的等待秒数，默认 2 秒，与 GUI 定时器一致。
-        """
-        # 即使未在线，执行注销也不会造成问题；按指定顺序强制执行可最大化成功率。
+    def _async_logout(self) -> None:
+        """异步执行注销操作（在后台线程中运行）。"""
+        self.network_worker.set_logout_task()
+        self.network_worker.start()
+
+    def _async_unbind(self, username: str) -> None:
+        """异步执行解绑操作（在后台线程中运行）。"""
+        self.network_worker.set_unbind_task(username)
+        self.network_worker.start()
+
+    def _async_check_status(self) -> None:
+        """异步执行状态检查（在后台线程中运行）。"""
+        self.network_worker.set_status_check_task()
+        self.network_worker.start()
+
+    def _async_get_devices(self) -> None:
+        """异步获取在线设备列表（在后台线程中运行）。"""
+        username = self.user_input.text()
+        password = self.pass_input.text()
+        # 如果密���为空，尝试从 keyring 获取
+        if not password and username:
+            kp = secure_storage.get_password(username)
+            if kp:
+                password = kp
+                self.pass_input.setText(kp)
+        if username and password:
+            self.network_worker.set_devices_query_task(username, password)
+            self.network_worker.start()
+
+    def run_headless_auto_login_sequence(self, delay_seconds: int = 2) -> None:
+        """静默模式下执行 解绑→延时→注销→延时→登录。"""
         self.unbind()
         time.sleep(max(0, delay_seconds))
         self.logout()
@@ -282,7 +388,7 @@ class CSUWIFILogin(QMainWindow):
         self.login()
 
     def save_config(self):
-        """Persist current UI state to QSettings (except password)."""
+        """保存配置到QSettings。"""
         selected_weekdays = [day_code for day_code, cb in self.weekday_checkboxes.items() if cb.isChecked()]
         self.settings.setValue('login/username', self.user_input.text().strip())
         self.settings.setValue('login/net_type', self.net_combo.currentText())
@@ -304,25 +410,14 @@ class CSUWIFILogin(QMainWindow):
         QMessageBox.information(self, '成功', '配置已保存！')
 
     def gui_login(self):
-        """GUI登录按钮点击处理方法。
-        验证输入后，直接调用自动登录序列。
-        自动登录序列内部会检查在线状态：
-        已在线：解绑→延时→注销→延时→登录
-        未在线：直接登录"""
+        """GUI登录按钮点击处理。"""
         username = self.user_input.text()
         password = self.pass_input.text()
-        # If password empty, try to fetch from keyring lazily
-        if not password and username:
-            kp = secure_storage.get_password(username)
-            if kp:
-                password = kp
-                self.pass_input.setText(kp)
-
+        # ...existing code...
         if not username or not password:
             self.status_label.setText('状态: 请填写学号和密码')
             return
 
-        # 直接调用自动登录序列，内部会判断在线状态
         self._start_auto_login_sequence()
 
     def login(self):
@@ -351,44 +446,15 @@ class CSUWIFILogin(QMainWindow):
         self.status_label.setText(f"状态: 正在使用 {net_type} 账户登录...")
         QApplication.processEvents()
 
-        try:
-            url = f'https://portal.csu.edu.cn:802/eportal/portal/login?user_account={user_account}&user_password={password}'
-            response = requests.get(url, timeout=5)
-            if '{"result":1,"msg":"Portal协议认证成功！"}' in response.text:
-                self.status_label.setText('状态: 登录成功！')
-                # 登录成功后自动查询状态和刷新设备
-                self.check_status()
-                self.get_online_devices()
-                # Check if auto-exit is enabled
-                if self.auto_exit_check.isChecked():
-                    QApplication.processEvents()
-                    sys.exit(0)
-            else:
-                self.status_label.setText(f'状态: 登录失败 - {response.text}')
-        except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
-        except requests.exceptions.ConnectionError:
-            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
-        except requests.RequestException as e:
-            self.status_label.setText(f'状态: 登录出错 - {e}')
+        # 使用异步方式执行登录
+        self._async_login(user_account, password)
 
     def logout(self):
         self.status_label.setText('状态: 正在注销...')
         QApplication.processEvents()
-        try:
-            url = 'https://portal.csu.edu.cn:802/eportal/portal/logout'
-            response = requests.get(url, timeout=5)
-            if 'success' in response.text:
-                 self.status_label.setText('状态: 注销成功')
-                 self.online_devices_table.setRowCount(0)
-            else:
-                 self.status_label.setText('状态: 注销失败')
-        except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
-        except requests.exceptions.ConnectionError:
-            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
-        except requests.RequestException as e:
-            self.status_label.setText(f'状态: 注销出错 - {e}')
+
+        # 使用异步方式执行注销
+        self._async_logout()
 
     def unbind(self):
         username = self.user_input.text()
@@ -398,21 +464,9 @@ class CSUWIFILogin(QMainWindow):
 
         self.status_label.setText('状态: 正在解绑设备...')
         QApplication.processEvents()
-        try:
-            url = f'https://portal.csu.edu.cn:802/eportal/portal/mac/unbind?user_account={username}'
-            response = requests.get(url, timeout=5)
-            # Assuming the response text gives a clear indication.
-            # You might need to adjust the check based on actual server response.
-            if 'success' in response.text or '成功' in response.text:
-                self.status_label.setText('状态: 解绑成功')
-            else:
-                self.status_label.setText(f'状态: 解绑失败 - {response.text}')
-        except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
-        except requests.exceptions.ConnectionError:
-            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
-        except requests.RequestException as e:
-            self.status_label.setText(f'状态: 解绑出错 - {e}')
+
+        # 使用异步方式执行解绑
+        self._async_unbind(username)
 
     def open_about_page(self):
         url = QUrl("https://github.com/Temparo/CSU-WIFI-AutoLogin/")
@@ -421,63 +475,8 @@ class CSUWIFILogin(QMainWindow):
     def refresh_online_devices(self):
         self.status_label.setText("状态:正在刷新设备列表...")
         QApplication.processEvents()
-        self.get_online_devices()
+        self._async_get_devices()
 
-    def get_online_devices(self):
-        username = self.user_input.text()
-        password = self.pass_input.text()
-        # If password empty, try to fetch from keyring lazily
-        if not password and username:
-            kp = secure_storage.get_password(username)
-            if kp:
-                password = kp
-                self.pass_input.setText(kp)
-        if not username or not password:
-            self.status_label.setText('状态: 请填写学号和密码以查询设备')
-            return
-
-        try:
-            # Note: This endpoint requires 'username', not the full 'user_account' with suffix.
-            url = f'https://portal.csu.edu.cn:802/eportal/portal/Custom/online_data?username={username}&password={password}'
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-
-            # Process JSONP response
-            jsonp_text = response.text
-            if jsonp_text.startswith('jsonpReturn(') and jsonp_text.endswith(');'):
-                json_str = jsonp_text[len('jsonpReturn('):-2]
-                data = json.loads(json_str)
-
-                if data.get("result") == 1:
-                    devices = data.get("data", [])
-                    self.online_devices_table.setRowCount(len(devices))
-                    for i, device in enumerate(devices):
-                        device_type = "PC" if device.get("phone_flag") == "0" else "手机"
-                        online_ip = device.get('online_ip', '')
-                        online_mac = device.get('online_mac', '')
-
-                        # 检查是否为本机
-                        if online_ip and online_mac and online_ip == self.current_device_ip and online_mac == self.current_device_mac:
-                            device_type += " (本机)"
-
-                        self.online_devices_table.setItem(i, 0, QTableWidgetItem(online_ip))
-                        self.online_devices_table.setItem(i, 1, QTableWidgetItem(online_mac))
-                        self.online_devices_table.setItem(i, 2, QTableWidgetItem(device.get('online_time', '')))
-                        self.online_devices_table.setItem(i, 3, QTableWidgetItem(device_type))
-                    self.status_label.setText(f'状态: 已获取在线设备列表，共 {len(devices)} 台设备。')
-                else:
-                    self.status_label.setText(f'状态: 获取设备列表失败 - {data.get("msg")}')
-            else:
-                self.status_label.setText('状态: 获取设备列表失败 - 响应格式不正确')
-
-        except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
-        except requests.exceptions.ConnectionError:
-            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
-        except requests.RequestException as e:
-            self.status_label.setText(f'状态: 获取设备列表出错 - {e}')
-        except json.JSONDecodeError:
-            self.status_label.setText('状态: 获取设备列表失败 - 解析响应失败')
 
     def update_schedule_options_ui(self):
         schedule_type = self.schedule_type_combo.currentText()
@@ -573,61 +572,12 @@ class CSUWIFILogin(QMainWindow):
         else:
             settings.remove(app_name)
 
-    def check_status(self) -> bool:
-        """检查当前网络认证状态
-        期望响应格式: ( {"result":1, ...} ) —— 最外层一对括号包裹 JSON 对象。
-        返回: bool 表示是否已经在线。"""
-        try:
-            dr = ''  # callback 参数，示例为空字符串
-            url = f'https://portal.csu.edu.cn/drcom/chkstatus?callback={dr}'
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            raw_text = response.text.strip()
+    def check_status(self):
+        """异步检查当前网络认证状态。"""
+        self.status_label.setText('状态: 正在查询状态...')
+        QApplication.processEvents()
+        self._async_check_status()
 
-            # 按示例格式解析: ( {...} )
-            if not (raw_text.startswith('(') and raw_text.endswith(')')):
-                self.status_label.setText('状态: 状态查询失败 - 响应不符合示例格式 (…JSON…)')
-                self.current_device_ip = None
-                self.current_device_mac = None
-                return False
-
-            json_str = raw_text[1:-1]
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                self.status_label.setText('状态: 状态查询失败 - JSON 解析错误')
-                self.current_device_ip = None
-                self.current_device_mac = None
-                return False
-
-            # 判断 result 字段
-            if data.get('result') == 1:
-                uid = data.get('uid', '')
-                v4ip = data.get('v4ip') or data.get('v46ip') or ''
-                self.current_device_ip = v4ip
-                self.current_device_mac = data.get('olmac')
-                self.status_label.setText(f'状态: 已在线 (账号: {uid} IP: {v4ip})')
-                return True
-            else:
-                self.status_label.setText('状态: 当前未在线')
-                self.current_device_ip = None
-                self.current_device_mac = None
-                return False
-        except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
-            self.current_device_ip = None
-            self.current_device_mac = None
-            return False
-        except requests.exceptions.ConnectionError:
-            self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
-            self.current_device_ip = None
-            self.current_device_mac = None
-            return False
-        except requests.RequestException as e:
-            self.status_label.setText(f'状态: 状态查询失败 - {e}')
-            self.current_device_ip = None
-            self.current_device_mac = None
-            return False
 
 
 if __name__ == '__main__':
