@@ -364,7 +364,7 @@ class CSUWIFILogin(QMainWindow):
             else:
                 self.status_label.setText(f'状态: 登录失败 - {response.text}')
         except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -382,7 +382,7 @@ class CSUWIFILogin(QMainWindow):
             else:
                  self.status_label.setText('状态: 注销失败')
         except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -406,7 +406,7 @@ class CSUWIFILogin(QMainWindow):
             else:
                 self.status_label.setText(f'状态: 解绑失败 - {response.text}')
         except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -469,7 +469,7 @@ class CSUWIFILogin(QMainWindow):
                 self.status_label.setText('状态: 获取设备列表失败 - 响应格式不正确')
 
         except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
         except requests.exceptions.ConnectionError:
             self.status_label.setText('状态: 未连接到校园网，请检查网络连接')
         except requests.RequestException as e:
@@ -612,7 +612,7 @@ class CSUWIFILogin(QMainWindow):
                 self.current_device_mac = None
                 return False
         except requests.exceptions.Timeout:
-            self.status_label.setText('状态: 请求超时，请稍后重试')
+            self.status_label.setText('状态: 请求超时，请关闭代理服务器、加速器、VPN等应用（如有）后重试')
             self.current_device_ip = None
             self.current_device_mac = None
             return False

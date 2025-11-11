@@ -4,3 +4,4 @@ build/
 dist/
 ./Release/
 config.json
+config1.json
