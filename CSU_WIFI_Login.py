@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGroupBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView, QStatusBar,
                              QGridLayout)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
-from PyQt6.QtCore import QSettings, QTime, QUrl, QTimer
+from PyQt6.QtCore import QSettings, QTime, QUrl, QTimer, Qt
 import secure_storage
 from network_worker import NetworkWorker
 
@@ -222,9 +222,8 @@ class CSUWIFILogin(QMainWindow):
         """处理登录完成信号。"""
         if success:
             self.status_label.setText(f'状态: {message}')
-            # 登录成功后自动查询状态和刷新设备
+            # 登录成功后自动查询状态（设备列表由状态查询完成后自动刷新）
             self._async_check_status()
-            self._async_get_devices()
             # 检查是否启用自动退出
             if self.auto_exit_check.isChecked():
                 QApplication.processEvents()
@@ -260,6 +259,9 @@ class CSUWIFILogin(QMainWindow):
                 self._auto_timer1.setSingleShot(True)
                 self._auto_timer1.timeout.connect(self._auto_login_do_logout)
                 self._auto_timer1.start(2000)
+            else:
+                # 普通状态查询完成后，立即查询设备列表（此时current_device_ip已更新）
+                self._async_get_devices()
         else:
             error = data.get('error', '当前未在线')
             if error == '当前未在线':
@@ -288,10 +290,20 @@ class CSUWIFILogin(QMainWindow):
                 if online_ip and online_mac and online_ip == self.current_device_ip and online_mac == self.current_device_mac:
                     device_type += " (本机)"
 
-                self.online_devices_table.setItem(i, 0, QTableWidgetItem(online_ip))
-                self.online_devices_table.setItem(i, 1, QTableWidgetItem(online_mac))
-                self.online_devices_table.setItem(i, 2, QTableWidgetItem(device.get('online_time', '')))
-                self.online_devices_table.setItem(i, 3, QTableWidgetItem(device_type))
+                # 创建单元格并设置居中对齐
+                ip_item = QTableWidgetItem(online_ip)
+                ip_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                mac_item = QTableWidgetItem(online_mac)
+                mac_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                time_item = QTableWidgetItem(device.get('online_time', ''))
+                time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                type_item = QTableWidgetItem(device_type)
+                type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                self.online_devices_table.setItem(i, 0, ip_item)
+                self.online_devices_table.setItem(i, 1, mac_item)
+                self.online_devices_table.setItem(i, 2, time_item)
+                self.online_devices_table.setItem(i, 3, type_item)
 
     def load_config(self, suppress_auto_sequence: bool = False):
         """加载配置从QSettings。"""
@@ -329,7 +341,6 @@ class CSUWIFILogin(QMainWindow):
             self._start_auto_login_sequence()
         else:
             self._async_check_status()
-            self._async_get_devices()
 
     def _start_auto_login_sequence(self):
         """异步自动登录流程。"""
