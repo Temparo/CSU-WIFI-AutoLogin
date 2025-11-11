@@ -10,12 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGridLayout)
 from PyQt6.QtGui import QIcon, QFont, QDesktopServices
 from PyQt6.QtCore import QSettings, QTime, QUrl, QTimer
-
-# --- Secure storage for password ---
-try:
-    import secure_storage
-except Exception:
-    secure_storage = None  # keyring may be unavailable; handle gracefully
+import secure_storage
 
 # QSettings organization/application identifiers
 ORG_NAME = "CSU"
@@ -78,8 +73,11 @@ class CSUWIFILogin(QMainWindow):
         self.startup_check = QCheckBox('开机自启')
         self.startup_check.setToolTip('设置程序是否在系统启动时自动运行')
         self.startup_check.stateChanged.connect(self.handle_startup)
+        self.auto_exit_check = QCheckBox('自动退出')
+        self.auto_exit_check.setToolTip('登录成功后自动关闭程序')
         login_settings_layout.addWidget(self.auto_login_check, 3, 0)
         login_settings_layout.addWidget(self.startup_check, 3, 1)
+        login_settings_layout.addWidget(self.auto_exit_check, 3, 2)
 
         login_settings_group.setLayout(login_settings_layout)
         layout.addWidget(login_settings_group)
@@ -208,6 +206,7 @@ class CSUWIFILogin(QMainWindow):
         username = self.settings.value('login/username', '', str)
         net_type = self.settings.value('login/net_type', '校园网', str)
         auto_login = self.settings.value('login/auto_login', False, bool)
+        auto_exit = self.settings.value('login/auto_exit', False, bool)
         schedule_enabled = self.settings.value('schedule/enabled', False, bool)
         schedule_time = self.settings.value('schedule/time', '08:00', str)
         schedule_type = self.settings.value('schedule/type', '每天', str)
@@ -217,12 +216,13 @@ class CSUWIFILogin(QMainWindow):
 
         # Populate UI
         self.user_input.setText(username)
-        if secure_storage and username:
+        if username:
             self.pass_input.setText(secure_storage.get_password(username) or '')
         else:
             self.pass_input.setText('')
         self.net_combo.setCurrentText(net_type)
         self.auto_login_check.setChecked(auto_login)
+        self.auto_exit_check.setChecked(auto_exit)
 
         self.schedule_group.setChecked(schedule_enabled)
         self.schedule_time_edit.setTime(QTime.fromString(schedule_time, "HH:mm"))
@@ -278,6 +278,7 @@ class CSUWIFILogin(QMainWindow):
         self.settings.setValue('login/username', self.user_input.text().strip())
         self.settings.setValue('login/net_type', self.net_combo.currentText())
         self.settings.setValue('login/auto_login', self.auto_login_check.isChecked())
+        self.settings.setValue('login/auto_exit', self.auto_exit_check.isChecked())
         self.settings.setValue('schedule/enabled', self.schedule_group.isChecked())
         self.settings.setValue('schedule/time', self.schedule_time_edit.time().toString("HH:mm"))
         self.settings.setValue('schedule/type', self.schedule_type_combo.currentText())
@@ -285,20 +286,19 @@ class CSUWIFILogin(QMainWindow):
         self.settings.setValue('schedule/weekdays', ','.join(selected_weekdays))
 
         # Store or clear password in keyring
-        if secure_storage:
-            username = self.user_input.text().strip()
-            pwd = self.pass_input.text()
-            if username and pwd:
-                secure_storage.set_password(username, pwd)
-            elif username and not pwd:
-                secure_storage.delete_password(username)
+        username = self.user_input.text().strip()
+        pwd = self.pass_input.text()
+        if username and pwd:
+            secure_storage.set_password(username, pwd)
+        elif username and not pwd:
+            secure_storage.delete_password(username)
         QMessageBox.information(self, '成功', '配置已保存！')
 
     def login(self):
         username = self.user_input.text()
         password = self.pass_input.text()
         # If password empty, try to fetch from keyring lazily
-        if not password and secure_storage and username:
+        if not password and username:
             kp = secure_storage.get_password(username)
             if kp:
                 password = kp
@@ -326,6 +326,10 @@ class CSUWIFILogin(QMainWindow):
             if '{"result":1,"msg":"Portal协议认证成功！"}' in response.text:
                 self.status_label.setText('状态: 登录成功！')
                 self.get_online_devices()
+                # Check if auto-exit is enabled
+                if self.auto_exit_check.isChecked():
+                    QApplication.processEvents()
+                    sys.exit(0)
             else:
                 self.status_label.setText(f'状态: 登录失败 - {response.text}')
         except requests.exceptions.Timeout:
@@ -390,7 +394,7 @@ class CSUWIFILogin(QMainWindow):
         username = self.user_input.text()
         password = self.pass_input.text()
         # If password empty, try to fetch from keyring lazily
-        if not password and secure_storage and username:
+        if not password and username:
             kp = secure_storage.get_password(username)
             if kp:
                 password = kp
